@@ -6,6 +6,7 @@
   https://opensource.org/licenses/MIT.
 */
 
+import pLimit from 'p-limit';
 import {assert} from 'workbox-core/_private/assert.js';
 import {cacheNames} from 'workbox-core/_private/cacheNames.js';
 import {logger} from 'workbox-core/_private/logger.js';
@@ -203,8 +204,12 @@ class PrecacheController {
       const installReportPlugin = new PrecacheInstallReportPlugin();
       this.strategy.plugins.push(installReportPlugin);
 
-      // Cache entries one at a time.
+      // Limit caching to 20 entries concurrently
+      // See https://github.com/GoogleChrome/workbox/issues/2880#issuecomment-1506579511
       // See https://github.com/GoogleChrome/workbox/issues/2528
+      const limit = pLimit(20);
+      const promises: Promise<void>[] = [];
+
       for (const [url, cacheKey] of this._urlsToCacheKeys) {
         const integrity = this._cacheKeysToIntegrities.get(cacheKey);
         const cacheMode = this._urlsToCacheModes.get(url);
@@ -215,14 +220,20 @@ class PrecacheController {
           credentials: 'same-origin',
         });
 
-        await Promise.all(
-          this.strategy.handleAll({
-            params: {cacheKey},
-            request,
-            event,
-          }),
-        );
+        const promise = limit(async () => {
+          await Promise.all(
+            this.strategy.handleAll({
+              params: {cacheKey},
+              request,
+              event,
+            }),
+          );
+        });
+
+        promises.push(promise);
       }
+
+      await Promise.all(promises);
 
       const {updatedURLs, notUpdatedURLs} = installReportPlugin;
 
